@@ -16,7 +16,6 @@ import (
 
 func main() {
 	tcpAddr := flag.String("tcp", ":1883", "network address for TCP listener")
-	wsAddr := flag.String("ws", ":1882", "network address for Websocket listener")
 	infoAddr := flag.String("info", ":8080", "network address for web info dashboard listener")
 	flag.Parse()
 
@@ -30,18 +29,13 @@ func main() {
 
 	fmt.Println(aurora.Magenta("Mochi MQTT Broker initializing..."))
 	fmt.Println(aurora.Cyan("TCP"), *tcpAddr)
-	fmt.Println(aurora.Cyan("Websocket"), *wsAddr)
 	fmt.Println(aurora.Cyan("$SYS Dashboard"), *infoAddr)
 
 	server := mqtt.New()
 	tcp := listeners.NewTCP("t1", *tcpAddr)
-	err := server.AddListener(tcp, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ws := listeners.NewWebsocket("ws1", *wsAddr)
-	err = server.AddListener(ws, nil)
+	err := server.AddListener(tcp, &listeners.Config{
+		Auth: new(Access),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -60,5 +54,4 @@ func main() {
 
 	server.Close()
 	fmt.Println(aurora.BgGreen("  Finished  "))
-
 }
