@@ -13,14 +13,14 @@
 <body>
 <div class="container">
     <div class="jumbotron text-center text-success">
-        <h1>Success!</h1>
+        <h1>You are ready to go!</h1>
         <p>
-            <strong>Username:</strong> {{.username}} <br/>
-            <strong>Password:</strong> {{.password}} <br/>
+            <strong>Username:</strong> {{.Username}} <br/>
+            <strong>Password:</strong> {{.Password}} <br/>
         </p>
         <h2>mosquitto</h2>
         <p>
-        <pre>mosquitto_sub -u {{.username}} -P {{.password}} -t {{.username}}/#</pre>
+        <pre>mosquitto_sub -u {{.Username}} -P {{.Password}} -t {{.Username}}/#</pre>
         </p>
     </div>
 </div>

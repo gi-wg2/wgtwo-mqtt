@@ -8,3 +8,8 @@ protoc \
   --go-grpc_opt=paths=source_relative \
   proto/*.proto
 ```
+
+## Build Docker image
+```shell script
+docker build . -t name:
+```

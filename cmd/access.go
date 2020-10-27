@@ -17,7 +17,7 @@ func (a *Access) Authenticate(user []byte, password []byte) bool {
 		return false
 	}
 	match := u.password == string(password)
-	log.Printf("username=%s -> %t", username, match)
+	log.Printf("Username=%s -> %t", username, match)
 	return match
 }
 
@@ -31,9 +31,9 @@ func (a *Access) ACL(user []byte, topic string, write bool) bool {
 	matched, err := regexp.MatchString(pattern, topic)
 
 	if write {
-		log.Printf("[WRITE] match=%t username=%s topic=%s", matched, username, topic)
+		log.Printf("[WRITE] match=%t Username=%s topic=%s", matched, username, topic)
 	} else {
-		log.Printf("[ READ] match=%t username=%s topic=%s", matched, username, topic)
+		log.Printf("[ READ] match=%t Username=%s topic=%s", matched, username, topic)
 	}
 
 	if !matched {

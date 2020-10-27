@@ -34,8 +34,8 @@ type User struct {
 }
 
 type Template struct {
-	username string
-	password string
+	Username string
+	Password string
 }
 
 var Users = make(map[string]User)
@@ -63,7 +63,7 @@ func index(w http.ResponseWriter, req *http.Request) {
 	if userId, ok := s.Values["user-id"]; ok {
 		msisdn := userId.(string)
 		if u, ok := Users[msisdn]; ok {
-			userinfo := Template{username: msisdn, password: u.password}
+			userinfo := Template{Username: msisdn, Password: u.password}
 			t, _ := template.ParseFiles("templates/success.html")
 			t.Execute(w, userinfo)
 			return
