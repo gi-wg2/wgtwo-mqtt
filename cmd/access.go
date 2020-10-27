@@ -9,8 +9,16 @@ import (
 type Access struct{}
 
 func (a *Access) Authenticate(user []byte, password []byte) bool {
-	log.Println("Username: " + string(user) + " Password: " + string(password))
-	return true
+	username := string(user)
+	log.Println("Username: " + username + " Password: " + string(password))
+
+	u, ok := Users[username]
+	if !ok {
+		return false
+	}
+	match := u.password == string(password)
+	log.Printf("username=%s -> %t", username, match)
+	return match
 }
 
 func (a *Access) ACL(user []byte, topic string, write bool) bool {

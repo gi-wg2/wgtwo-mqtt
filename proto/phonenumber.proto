@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package wgtwo.common.v0;
+
+option go_package = "github.com/gi-wg2/wgtwo-mqtt/intern/proto";
+
+message PhoneNumber {
+
+  /* Phone number formatted as E.164 with leading plus sign
+   *
+   * This contains of three components:
+   * - The plus prefix
+   * - Country code, max 3 digits
+   * - Subscriber number
+   *
+   * Test your number at https://libphonenumber.appspot.com/
+   * Example: +12024561111
+   */
+  string e164 = 1;
+}
+
+message TextAddress {
+  string textAddress = 1;
+}
+
+// Any phone number that is tied to a specific country.
+// Does not contain the prefix '+' nor a country code.
+message NationalPhoneNumber {
+  string nationalPhoneNumber = 1;
+}

@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package wgtwo.events.v0;
+
+option go_package = "github.com/gi-wg2/wgtwo-mqtt/intern/proto";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "proto/phonenumber.proto";
+
+service EventsService {
+  rpc Subscribe (SubscribeEventsRequest) returns (stream SubscribeEventsResponse) {}
+  rpc Ack (AckRequest) returns (AckResponse) {}
+}
+
+enum EventType {
+  UNSPECIFIED = 0;
+  VOICE_EVENT = 1;
+  VOICEMAIL_EVENT = 2;
+  LOCATION_UPDATE_EVENT = 3;
+  ROAMING_EVENT = 4;
+  TOKEN_AUDIT_EVENT = 5;
+}
+
+message ManualAckConfig {
+  bool enable = 1;
+  google.protobuf.Duration timeout = 2;
+}
+
+message SubscribeEventsRequest {
+  repeated EventType type = 1;
+  oneof start_position {
+    uint64 start_at_sequence = 2;
+    google.protobuf.Timestamp start_at_timestamp = 3;
+    google.protobuf.Duration start_at_time_delta = 4;
+    google.protobuf.Empty start_with_last_received = 5;
+    google.protobuf.Empty start_at_oldest_possible = 11;
+  }
+  string client_id = 6;
+  string queue_name = 7;
+  string durable_name = 8;
+  uint32 max_in_flight = 9;
+  ManualAckConfig manual_ack = 10;
+}
+
+message SubscribeEventsResponse {
+  Event event = 1;
+}
+
+message AckRequest {
+  string inbox = 1;
+  uint64 sequence = 2;
+}
+
+message AckResponse {
+}
+
+message EventMetadata {
+  uint64 sequence = 1;
+  bool is_redelivered = 2;
+  string ack_inbox = 3;
+}
+
+message Event {
+  EventMetadata metadata = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string service_id = 3;
+  oneof event {
+    VoiceEvent voice_event = 4;
+    VoicemailEvent voicemail_event = 5;
+    LocationUpdateEvent location_update_event = 6;
+    RoamingEvent roaming_event = 7;
+  }
+}
+
+message VoiceEvent {
+  enum VoiceEventType {
+    UNSPECIFIED = 0;
+    CALL_INITIATED = 1;
+    CALL_RINGING = 2;
+    CALL_ANSWERED = 3;
+    CALL_ENDED = 4;
+    CALL_FWD_VOICEMAIL = 5;
+  }
+
+  string call_id = 1;
+  VoiceEventType type = 2;
+  wgtwo.common.v0.PhoneNumber from_number = 3;
+  wgtwo.common.v0.PhoneNumber to_number = 4;
+  wgtwo.common.v0.PhoneNumber owner = 5;
+  bool caller_id_hidden = 6;
+}
+
+message VoicemailEvent {
+  enum VoicemailEventType {
+    UNSPECIFIED = 0;
+    NEW_VOICEMAIL = 1;
+  }
+
+  string voicemail_id = 1;
+  VoicemailEventType type = 2;
+  wgtwo.common.v0.PhoneNumber from_number = 3;
+  wgtwo.common.v0.PhoneNumber to_number = 4;
+}
+
+message LocationUpdateEvent {
+  message Location {
+    string msc_vlr_global_title = 1;
+    string sgsn_global_title = 2;
+    string mme_hostname = 3;
+  }
+  string imsi = 1;
+  wgtwo.common.v0.PhoneNumber number = 2;
+  Location previous = 3;
+  Location current = 4;
+}
+
+message RoamingEvent {
+  message Location {
+    string country_code = 1;
+    string country_name = 2;
+  }
+  string imsi = 1;
+  wgtwo.common.v0.PhoneNumber msisdn = 2;
+  Location previous_location = 3;
+  Location current_location = 4;
+}
