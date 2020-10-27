@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/gi-wg2/wgtwo-mqtt/intern/oauth/wgtwo"
 	"golang.org/x/oauth2/clientcredentials"
+	"html/template"
 	"strings"
 
 	//pb "github.com/gi-wg2/wgtwo-mqtt/intern/proto"
@@ -32,6 +33,11 @@ type User struct {
 	password string
 }
 
+type Template struct {
+	username string
+	password string
+}
+
 var Users = make(map[string]User)
 
 var seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -44,8 +50,7 @@ func StringWithCharset(length int, charset string) string {
 	return string(b)
 }
 
-const charset = "abcdefghijklmnopqrstuvwxyz" +
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 var AdminPassword = StringWithCharset(128, charset)
 
@@ -53,27 +58,46 @@ func getProviderName(*http.Request) (string, error) {
 	return "wgtwo", nil
 }
 
+func index(w http.ResponseWriter, req *http.Request) {
+	s, _ := store.Get(req, "mqtt")
+	if userId, ok := s.Values["user-id"]; ok {
+		msisdn := userId.(string)
+		if u, ok := Users[msisdn]; ok {
+			userinfo := Template{username: msisdn, password: u.password}
+			t, _ := template.ParseFiles("templates/success.html")
+			t.Execute(w, userinfo)
+			return
+		}
+	}
+	t, _ := template.ParseFiles("templates/login.html")
+	t.Execute(w, nil)
+}
+
 func login(w http.ResponseWriter, req *http.Request) {
 	gothic.GetProviderName = getProviderName
-	if user, err := gothic.CompleteUserAuth(w, req); err == nil {
-		log.Println("Already logged in: " + user.UserID)
-	} else {
-		gothic.BeginAuthHandler(w, req)
-	}
+	gothic.BeginAuthHandler(w, req)
 }
 
 func callback(w http.ResponseWriter, req *http.Request) {
 	user, err := gothic.CompleteUserAuth(w, req)
 	if err != nil {
-		fmt.Fprintln(w, err)
-		return
+		log.Println("Issue while completing OAuth flow", err)
+	} else {
+		key := strings.Replace(user.UserID, "+", "", 1)
+		u := User{password: StringWithCharset(32, charset)}
+		Users[key] = u
+		s, _ := store.New(req, "mqtt")
+		s.Values["user-id"] = key
+		err := s.Save(req, w)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
-
-	key := strings.Replace(user.UserID, "+", "", 1)
-	u := User{password: StringWithCharset(32, charset)}
-	Users[key] = u
-	_, _ = w.Write([]byte("Connect to MQTT: username=" + key + " password=" + u.password))
+	http.Redirect(w, req, "/", http.StatusSeeOther)
 }
+
+var store *sessions.CookieStore
 
 func main() {
 	var tcpAddr = flag.String("tcp", ":1883", "network address for TCP listener")
@@ -87,14 +111,13 @@ func main() {
 		log.Fatalln("--redirect-url cannot be null")
 	}
 
-	key := "Secret-session-key"  // Replace with your SESSION_SECRET or similar
-	maxAge := 86400 * 30  // 30 days
-	store := sessions.NewCookieStore([]byte(key))
+	key := "Secret-session-key"
+	maxAge := 86400 * 30        // 30 days
+	store = sessions.NewCookieStore([]byte(key))
 	store.MaxAge(maxAge)
 	store.Options.Path = "/"
 	store.Options.HttpOnly = true
 	store.Options.Secure = false
-
 	gothic.Store = store
 	goth.UseProviders(
 		wgtwo.New(*clientId, *clientSecret, *redirectUrl, "phone", "offline_access", "events.voice.subscribe"),
@@ -121,68 +144,66 @@ func main() {
 		TokenURL: wgtwo.Endpoint.TokenURL,
 	}
 
-
 	token, err := clientCredentialsConfig.Token(context.Background())
 	if err != nil {
 		panic(err)
 	}
 	log.Println("Token: " + token.AccessToken)
 
-/*
-	//tokenSource := clienCredentialsConfig.TokenSource(context.Background())
-	conn, err := grpc.Dial(
-		"api.wgtwo.com:443",
-		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
-)
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
+	/*
+	   	//tokenSource := clienCredentialsConfig.TokenSource(context.Background())
+	   	conn, err := grpc.Dial(
+	   		"api.wgtwo.com:443",
+	   		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
+	   )
+	   	if err != nil {
+	   		panic(err)
+	   	}
+	   	defer conn.Close()
 
- */
+	*/
 	/*
 
-	c := pb.NewEventsServiceClient(conn)
-	ctx, kancel := context.WithTimeout(context.Background(), time.Second)
-	defer kancel()
+		c := pb.NewEventsServiceClient(conn)
+		ctx, kancel := context.WithTimeout(context.Background(), time.Second)
+		defer kancel()
 
-	eventTimeout, err := time.ParseDuration("10s")
-	if err != nil {
-		log.Panicln("Could not parse timeout")
-	}
-
-	r, err := c.Subscribe(ctx, &pb.SubscribeEventsRequest{
-		Type:          []pb.EventType{pb.EventType_VOICE_EVENT},
-		StartPosition: &pb.SubscribeEventsRequest_StartAtOldestPossible{},
-		ClientId:      uuid.New().String(),
-		QueueName:     "wgtwo-mqtt",
-		DurableName:   "wgtwo-mqtt",
-		MaxInFlight:   10,
-		ManualAck: &pb.ManualAckConfig{
-			Enable:  true,
-			Timeout: ptypes.DurationProto(eventTimeout),
-		},
-	})
-	if err != nil {
-		log.Panicln("Error while fetching events")
-	}
-	for {
-		event, err := r.Recv()
-		if err == io.EOF {
-			break
-		}
+		eventTimeout, err := time.ParseDuration("10s")
 		if err != nil {
-			log.Fatalln("Could not get event", err)
+			log.Panicln("Could not parse timeout")
 		}
-		log.Println(event)
-	}
 
-	 */
+		r, err := c.Subscribe(ctx, &pb.SubscribeEventsRequest{
+			Type:          []pb.EventType{pb.EventType_VOICE_EVENT},
+			StartPosition: &pb.SubscribeEventsRequest_StartAtOldestPossible{},
+			ClientId:      uuid.New().String(),
+			QueueName:     "wgtwo-mqtt",
+			DurableName:   "wgtwo-mqtt",
+			MaxInFlight:   10,
+			ManualAck: &pb.ManualAckConfig{
+				Enable:  true,
+				Timeout: ptypes.DurationProto(eventTimeout),
+			},
+		})
+		if err != nil {
+			log.Panicln("Error while fetching events")
+		}
+		for {
+			event, err := r.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Fatalln("Could not get event", err)
+			}
+			log.Println(event)
+		}
+
+	*/
 
 	http.HandleFunc("/oauth/callback", callback)
-	http.HandleFunc("/", login)
-
-	log.Println("XXXXXXXXXXXXXXx")
+	http.HandleFunc("/login", login)
+	http.HandleFunc("/", index)
 
 	httpServer := &http.Server{Addr: ":9099"}
 	go func() {
