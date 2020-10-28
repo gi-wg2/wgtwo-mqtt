@@ -12,6 +12,10 @@ import (
 
 const endpointProfile string = "https://id.wgtwo.com/userinfo"
 
+func GetProviderName(*http.Request) (string, error) {
+	return "wgtwo", nil
+}
+
 // New creates a new Working Group Two provider, and sets up important connection details.
 // You should always call `wgtwo.New` to get a new Provider. Never try to create
 // one manually.

@@ -8,16 +8,19 @@ import (
 
 type Access struct{}
 
-func (a *Access) Authenticate(user []byte, password []byte) bool {
-	username := string(user)
-	log.Println("Username: " + username + " Password: " + string(password))
+func (a *Access) Authenticate(usernameBytes []byte, passwordbytes []byte) bool {
+	username := string(usernameBytes)
+	password := string(passwordbytes)
+
+	if username == "admin" && password == AdminPassword {
+		return true
+	}
 
 	u, ok := Users[username]
 	if !ok {
 		return false
 	}
-	match := u.password == string(password)
-	log.Printf("Username=%s -> %t", username, match)
+	match := u.password == password
 	return match
 }
 
@@ -29,19 +32,9 @@ func (a *Access) ACL(user []byte, topic string, write bool) bool {
 
 	pattern := fmt.Sprintf("^%s/", username)
 	matched, err := regexp.MatchString(pattern, topic)
-
-	if write {
-		log.Printf("[WRITE] match=%t Username=%s topic=%s", matched, username, topic)
-	} else {
-		log.Printf("[ READ] match=%t Username=%s topic=%s", matched, username, topic)
-	}
-
-	if !matched {
-		log.Println("No match")
-		return false
-	}
 	if err != nil {
 		log.Fatalln("ACL regex failed")
+		return false
 	}
-	return true
+	return matched
 }

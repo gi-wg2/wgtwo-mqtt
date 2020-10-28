@@ -4,29 +4,35 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	mqttc "github.com/eclipse/paho.mqtt.golang"
+	"github.com/gi-wg2/wgtwo-mqtt/intern"
 	"github.com/gi-wg2/wgtwo-mqtt/intern/oauth/wgtwo"
-	"golang.org/x/oauth2/clientcredentials"
-	"html/template"
-	"strings"
-
-	//pb "github.com/gi-wg2/wgtwo-mqtt/intern/proto"
-	//"github.com/golang/protobuf/ptypes"
-	//"github.com/google/uuid"
+	pb "github.com/gi-wg2/wgtwo-mqtt/intern/proto"
+	"github.com/golang/protobuf/jsonpb"
+	"github.com/golang/protobuf/ptypes"
+	"github.com/google/uuid"
+	"github.com/gorilla/sessions"
+	"github.com/grpc-ecosystem/go-grpc-middleware/retry"
 	"github.com/logrusorgru/aurora"
 	"github.com/markbates/goth"
-	//"io"
-	"log"
-	"math/rand"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
-	"github.com/gorilla/sessions"
 	"github.com/markbates/goth/gothic"
 	mqtt "github.com/mochi-co/mqtt/server"
 	"github.com/mochi-co/mqtt/server/listeners"
+	"golang.org/x/oauth2/clientcredentials"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/oauth"
+	"google.golang.org/grpc/status"
+	"html/template"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 )
 
 type User struct {
@@ -38,25 +44,9 @@ type Template struct {
 	Password string
 }
 
+var AdminPassword = intern.RandomAlphanumeric(128)
+
 var Users = make(map[string]User)
-
-var seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
-
-func StringWithCharset(length int, charset string) string {
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
-	}
-	return string(b)
-}
-
-const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-var AdminPassword = StringWithCharset(128, charset)
-
-func getProviderName(*http.Request) (string, error) {
-	return "wgtwo", nil
-}
 
 func index(w http.ResponseWriter, req *http.Request) {
 	s, _ := store.Get(req, "mqtt")
@@ -74,7 +64,7 @@ func index(w http.ResponseWriter, req *http.Request) {
 }
 
 func login(w http.ResponseWriter, req *http.Request) {
-	gothic.GetProviderName = getProviderName
+	gothic.GetProviderName = wgtwo.GetProviderName
 	gothic.BeginAuthHandler(w, req)
 }
 
@@ -84,7 +74,7 @@ func callback(w http.ResponseWriter, req *http.Request) {
 		log.Println("Issue while completing OAuth flow", err)
 	} else {
 		key := strings.Replace(user.UserID, "+", "", 1)
-		u := User{password: StringWithCharset(32, charset)}
+		u := User{password: intern.RandomAlphanumeric(32)}
 		Users[key] = u
 		s, _ := store.New(req, "mqtt")
 		s.Values["user-id"] = key
@@ -111,8 +101,8 @@ func main() {
 		log.Fatalln("--redirect-url cannot be null")
 	}
 
-	key := "Secret-session-key"
-	maxAge := 86400 * 30        // 30 days
+	key := intern.RandomAlphanumeric(32)
+	maxAge := 86400 * 30 // 30 days
 	store = sessions.NewCookieStore([]byte(key))
 	store.MaxAge(maxAge)
 	store.Options.Path = "/"
@@ -120,7 +110,12 @@ func main() {
 	store.Options.Secure = false
 	gothic.Store = store
 	goth.UseProviders(
-		wgtwo.New(*clientId, *clientSecret, *redirectUrl, "phone", "offline_access", "events.voice.subscribe"),
+		wgtwo.New(
+			*clientId,
+			*clientSecret,
+			*redirectUrl,
+			"phone", "offline_access", "events.voice.subscribe", "events.voicemail.subscribe",
+		),
 	)
 
 	sigs := make(chan os.Signal, 1)
@@ -134,72 +129,6 @@ func main() {
 	fmt.Println(aurora.Magenta("Mochi MQTT Broker initializing..."))
 	fmt.Println(aurora.Cyan("TCP"), *tcpAddr)
 	fmt.Println(aurora.Cyan("$SYS Dashboard"), *infoAddr)
-
-	clientCredentialsConfig := &clientcredentials.Config{
-		ClientID:     *clientId,
-		ClientSecret: *clientSecret,
-		Scopes: []string{
-			"events.voice.subscribe",
-		},
-		TokenURL: wgtwo.Endpoint.TokenURL,
-	}
-
-	token, err := clientCredentialsConfig.Token(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	log.Println("Token: " + token.AccessToken)
-
-	/*
-	   	//tokenSource := clienCredentialsConfig.TokenSource(context.Background())
-	   	conn, err := grpc.Dial(
-	   		"api.wgtwo.com:443",
-	   		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
-	   )
-	   	if err != nil {
-	   		panic(err)
-	   	}
-	   	defer conn.Close()
-
-	*/
-	/*
-
-		c := pb.NewEventsServiceClient(conn)
-		ctx, kancel := context.WithTimeout(context.Background(), time.Second)
-		defer kancel()
-
-		eventTimeout, err := time.ParseDuration("10s")
-		if err != nil {
-			log.Panicln("Could not parse timeout")
-		}
-
-		r, err := c.Subscribe(ctx, &pb.SubscribeEventsRequest{
-			Type:          []pb.EventType{pb.EventType_VOICE_EVENT},
-			StartPosition: &pb.SubscribeEventsRequest_StartAtOldestPossible{},
-			ClientId:      uuid.New().String(),
-			QueueName:     "wgtwo-mqtt",
-			DurableName:   "wgtwo-mqtt",
-			MaxInFlight:   10,
-			ManualAck: &pb.ManualAckConfig{
-				Enable:  true,
-				Timeout: ptypes.DurationProto(eventTimeout),
-			},
-		})
-		if err != nil {
-			log.Panicln("Error while fetching events")
-		}
-		for {
-			event, err := r.Recv()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				log.Fatalln("Could not get event", err)
-			}
-			log.Println(event)
-		}
-
-	*/
 
 	http.HandleFunc("/oauth/callback", callback)
 	http.HandleFunc("/login", login)
@@ -215,7 +144,7 @@ func main() {
 
 	server := mqtt.New()
 	tcp := listeners.NewTCP("t1", *tcpAddr)
-	err = server.AddListener(tcp, &listeners.Config{
+	err := server.AddListener(tcp, &listeners.Config{
 		Auth: new(Access),
 	})
 	if err != nil {
@@ -230,6 +159,126 @@ func main() {
 
 	go http.ListenAndServe(":9099", nil)
 	go server.Serve()
+
+	opts := mqttc.NewClientOptions().AddBroker("tcp://localhost:1883").SetClientID("admin")
+	opts.SetUsername("admin")
+	opts.SetPassword(AdminPassword)
+	mqttClient := mqttc.NewClient(opts)
+	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
+		panic(token.Error())
+	}
+
+	clientCredentialsConfig := &clientcredentials.Config{
+		ClientID:     *clientId,
+		ClientSecret: *clientSecret,
+		Scopes: []string{
+			"events.voice.subscribe",
+			"events.voicemail.subscribe",
+			"voicemail.get",
+		},
+		TokenURL: wgtwo.Endpoint.TokenURL,
+	}
+
+	token, err := clientCredentialsConfig.Token(context.Background())
+	if err != nil {
+		panic(err)
+	}
+	log.Println("Token: " + token.AccessToken)
+
+	perRpc := oauth.NewOauthAccess(token)
+
+	conn, err := grpc.Dial(
+		"api.wgtwo.com:443",
+		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
+		grpc.WithPerRPCCredentials(perRpc),
+		grpc.WithStreamInterceptor(grpc_retry.StreamClientInterceptor(
+			grpc_retry.WithMax(999),
+			grpc_retry.WithBackoff(grpc_retry.BackoffLinear(100*time.Millisecond)),
+			grpc_retry.WithCodes(codes.ResourceExhausted, codes.Internal, codes.Unavailable, codes.Unknown, codes.DataLoss),
+		)),
+	)
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	c := pb.NewEventsServiceClient(conn)
+
+	eventTimeout, err := time.ParseDuration("10s")
+	if err != nil {
+		log.Panicln("Could not parse timeout")
+	}
+
+		marshaler := jsonpb.Marshaler{}
+
+	go func() {
+		log.Println("Starting subscription")
+		ctx := context.Background()
+		r, err := c.Subscribe(ctx, &pb.SubscribeEventsRequest{
+			Type:          []pb.EventType{pb.EventType_VOICE_EVENT, pb.EventType_VOICEMAIL_EVENT},
+			StartPosition: &pb.SubscribeEventsRequest_StartAtOldestPossible{},
+			ClientId:      uuid.New().String(),
+			QueueName:     intern.RandomAlphanumeric(12),
+			DurableName:   intern.RandomAlphanumeric(12),
+			//QueueName:     "wgtwo-mqtt",
+			//DurableName:   "wgtwo-mqtt",
+			MaxInFlight: 10,
+			ManualAck: &pb.ManualAckConfig{
+				Enable:  true,
+				Timeout: ptypes.DurationProto(eventTimeout),
+			},
+		}, grpc_retry.WithMax(10))
+		if err != nil {
+			log.Panicln("Error while fetching events")
+		}
+		for {
+			response, err := r.Recv()
+			if err == io.EOF {
+				break
+			} else if err != nil {
+				errStatus, _ := status.FromError(err)
+				log.Fatalf("Could not get response: %s\n", errStatus.Code())
+			}
+
+			event := response.Event
+
+			switch x := event.Event.(type) {
+			case *pb.Event_VoiceEvent:
+				log.Println("VOICE EVENT")
+				json, err := marshaler.MarshalToString(response)
+				if err != nil {
+					log.Println(json)
+				}
+
+				owner := event.GetVoiceEvent().Owner.E164
+				msisdn := strings.Replace(owner, "+", "", 1)
+				topic := fmt.Sprintf("%s/events/voice/%s", msisdn, event.GetVoiceEvent().Type.String())
+				mqttClient.Publish(topic, 2, false, json)
+
+			case *pb.Event_VoicemailEvent:
+				log.Println("VOICEMAIL EVENT")
+				voicemailEvent := event.GetVoicemailEvent()
+				if voicemailEvent.Type != pb.VoicemailEvent_NEW_VOICEMAIL {
+					break
+				}
+
+				json, err := marshaler.MarshalToString(response)
+				if err != nil {
+					log.Println(json)
+				}
+
+				owner := event.GetVoicemailEvent().ToNumber.E164
+				msisdn := strings.Replace(owner, "+", "", 1)
+				topic := fmt.Sprintf("%s/events/voicemail", msisdn)
+				mqttClient.Publish(topic, 2, false, json)
+			default:
+				log.Printf("Invalid event type: Event has unexpected type %T", x)
+			}
+			ackCtx, _ := context.WithTimeout(context.Background(), time.Second*10)
+			c.Ack(ackCtx, &pb.AckRequest{Inbox: event.Metadata.AckInbox, Sequence: event.Metadata.Sequence})
+		}
+	}()
+
 	fmt.Println(aurora.BgMagenta("  Started!  "))
 
 	<-done
