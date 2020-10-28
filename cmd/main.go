@@ -89,7 +89,80 @@ func callback(w http.ResponseWriter, req *http.Request) {
 	http.Redirect(w, req, "/", http.StatusSeeOther)
 }
 
+var marshaler = jsonpb.Marshaler{}
+
 var store *sessions.CookieStore
+
+func subscribe(c pb.EventsServiceClient, mqtt mqttc.Client) {
+	log.Println("Starting subscription")
+	ctx := context.TODO()
+	request := &pb.SubscribeEventsRequest{
+		Type:          []pb.EventType{pb.EventType_VOICE_EVENT, pb.EventType_VOICEMAIL_EVENT},
+		StartPosition: &pb.SubscribeEventsRequest_StartAtOldestPossible{},
+		ClientId:      uuid.New().String(),
+		QueueName:     "wgtwo-mqtt",
+		DurableName:   "wgtwo-mqtt",
+		MaxInFlight:   10,
+		ManualAck: &pb.ManualAckConfig{
+			Enable:  true,
+			Timeout: ptypes.DurationProto(10 * time.Second),
+		},
+	}
+	r, err := c.Subscribe(
+		ctx,
+		request,
+		grpc_retry.WithMax(MaxUint))
+	if err != nil {
+		log.Println("Error while fetching events")
+	}
+	for {
+		response, err := r.Recv()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			errStatus, _ := status.FromError(err)
+			log.Printf("Could not get response: %s\n", errStatus.Code())
+			break
+		}
+
+		event := response.Event
+
+		switch x := event.Event.(type) {
+		case *pb.Event_VoiceEvent:
+			log.Println("VOICE EVENT")
+			json, err := marshaler.MarshalToString(response)
+			if err != nil {
+				log.Println(json)
+			}
+
+			owner := event.GetVoiceEvent().Owner.E164
+			msisdn := strings.Replace(owner, "+", "", 1)
+			topic := fmt.Sprintf("%s/events/voice/%s", msisdn, event.GetVoiceEvent().Type.String())
+			mqtt.Publish(topic, 2, false, json)
+
+		case *pb.Event_VoicemailEvent:
+			log.Println("VOICEMAIL EVENT")
+			voicemailEvent := event.GetVoicemailEvent()
+			if voicemailEvent.Type != pb.VoicemailEvent_NEW_VOICEMAIL {
+				break
+			}
+
+			json, err := marshaler.MarshalToString(response)
+			if err != nil {
+				log.Println(json)
+			}
+
+			owner := event.GetVoicemailEvent().ToNumber.E164
+			msisdn := strings.Replace(owner, "+", "", 1)
+			topic := fmt.Sprintf("%s/events/voicemail", msisdn)
+			mqtt.Publish(topic, 2, false, json)
+		default:
+			log.Printf("Invalid event type: Event has unexpected type %T", x)
+		}
+		ackCtx, _ := context.WithTimeout(context.Background(), time.Second*10)
+		c.Ack(ackCtx, &pb.AckRequest{Inbox: event.Metadata.AckInbox, Sequence: event.Metadata.Sequence})
+	}
+}
 
 func main() {
 	var tcpAddr = flag.String("tcp", ":1883", "network address for TCP listener")
@@ -181,17 +254,15 @@ func main() {
 		TokenURL: wgtwo.Endpoint.TokenURL,
 	}
 
-	token, err := clientCredentialsConfig.Token(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	perRpc := oauth.NewOauthAccess(token)
-
+	clientTokens := clientCredentialsConfig.TokenSource(context.Background())
+	perRpc := oauth.TokenSource{TokenSource: clientTokens}
 	conn, err := grpc.Dial(
 		"api.wgtwo.com:443",
 		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
 		grpc.WithPerRPCCredentials(perRpc),
-		grpc.WithStreamInterceptor(grpc_retry.StreamClientInterceptor()),
+		grpc.WithStreamInterceptor(grpc_retry.StreamClientInterceptor(
+			grpc_retry.WithBackoff(grpc_retry.BackoffLinear(100*time.Millisecond)),
+			grpc_retry.WithCodes(codes.ResourceExhausted, codes.Internal, codes.Unavailable, codes.Unknown, codes.DataLoss))),
 	)
 	if err != nil {
 		panic(err)
@@ -200,84 +271,9 @@ func main() {
 
 	c := pb.NewEventsServiceClient(conn)
 
-	eventTimeout, err := time.ParseDuration("10s")
-	if err != nil {
-		log.Panicln("Could not parse timeout")
-	}
-
-		marshaler := jsonpb.Marshaler{}
-
 	go func() {
-		log.Println("Starting subscription")
-		ctx := context.Background()
-		request := &pb.SubscribeEventsRequest{
-			Type:          []pb.EventType{pb.EventType_VOICE_EVENT, pb.EventType_VOICEMAIL_EVENT},
-			StartPosition: &pb.SubscribeEventsRequest_StartAtOldestPossible{},
-			ClientId:      uuid.New().String(),
-			QueueName:     intern.RandomAlphanumeric(12),
-			DurableName:   intern.RandomAlphanumeric(12),
-			//QueueName:     "wgtwo-mqtt",
-			//DurableName:   "wgtwo-mqtt",
-			MaxInFlight: 10,
-			ManualAck: &pb.ManualAckConfig{
-				Enable:  true,
-				Timeout: ptypes.DurationProto(eventTimeout),
-			},
-		}
-		r, err := c.Subscribe(
-			ctx,
-			request,
-			grpc_retry.WithMax(MaxUint),
-			grpc_retry.WithBackoff(grpc_retry.BackoffLinear(100*time.Millisecond)),
-			grpc_retry.WithCodes(codes.ResourceExhausted, codes.Internal, codes.Unavailable, codes.Unknown, codes.DataLoss),)
-		if err != nil {
-			log.Panicln("Error while fetching events")
-		}
 		for {
-			response, err := r.Recv()
-			if err == io.EOF {
-				break
-			} else if err != nil {
-				errStatus, _ := status.FromError(err)
-				log.Fatalf("Could not get response: %s\n", errStatus.Code())
-			}
-
-			event := response.Event
-
-			switch x := event.Event.(type) {
-			case *pb.Event_VoiceEvent:
-				log.Println("VOICE EVENT")
-				json, err := marshaler.MarshalToString(response)
-				if err != nil {
-					log.Println(json)
-				}
-
-				owner := event.GetVoiceEvent().Owner.E164
-				msisdn := strings.Replace(owner, "+", "", 1)
-				topic := fmt.Sprintf("%s/events/voice/%s", msisdn, event.GetVoiceEvent().Type.String())
-				mqttClient.Publish(topic, 2, false, json)
-
-			case *pb.Event_VoicemailEvent:
-				log.Println("VOICEMAIL EVENT")
-				voicemailEvent := event.GetVoicemailEvent()
-				if voicemailEvent.Type != pb.VoicemailEvent_NEW_VOICEMAIL {
-					break
-				}
-
-				json, err := marshaler.MarshalToString(response)
-				if err != nil {
-					log.Println(json)
-				}
-
-				owner := event.GetVoicemailEvent().ToNumber.E164
-				msisdn := strings.Replace(owner, "+", "", 1)
-				topic := fmt.Sprintf("%s/events/voicemail", msisdn)
-				mqttClient.Publish(topic, 2, false, json)
-			default:
-				log.Printf("Invalid event type: Event has unexpected type %T", x)
-			}
-			ackCtx, _ := context.WithTimeout(context.Background(), time.Second*10)
-			c.Ack(ackCtx, &pb.AckRequest{Inbox: event.Metadata.AckInbox, Sequence: event.Metadata.Sequence})
+			subscribe(c, mqttClient)
 		}
 	}()
 
