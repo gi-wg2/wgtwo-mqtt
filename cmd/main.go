@@ -48,6 +48,8 @@ var AdminPassword = intern.RandomAlphanumeric(128)
 
 var Users = make(map[string]User)
 
+const MaxUint = ^uint(0)
+
 func index(w http.ResponseWriter, req *http.Request) {
 	s, _ := store.Get(req, "mqtt")
 	if userId, ok := s.Values["user-id"]; ok {
@@ -183,19 +185,13 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	log.Println("Token: " + token.AccessToken)
-
 	perRpc := oauth.NewOauthAccess(token)
 
 	conn, err := grpc.Dial(
 		"api.wgtwo.com:443",
 		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
 		grpc.WithPerRPCCredentials(perRpc),
-		grpc.WithStreamInterceptor(grpc_retry.StreamClientInterceptor(
-			grpc_retry.WithMax(999),
-			grpc_retry.WithBackoff(grpc_retry.BackoffLinear(100*time.Millisecond)),
-			grpc_retry.WithCodes(codes.ResourceExhausted, codes.Internal, codes.Unavailable, codes.Unknown, codes.DataLoss),
-		)),
+		grpc.WithStreamInterceptor(grpc_retry.StreamClientInterceptor()),
 	)
 	if err != nil {
 		panic(err)
@@ -214,7 +210,7 @@ func main() {
 	go func() {
 		log.Println("Starting subscription")
 		ctx := context.Background()
-		r, err := c.Subscribe(ctx, &pb.SubscribeEventsRequest{
+		request := &pb.SubscribeEventsRequest{
 			Type:          []pb.EventType{pb.EventType_VOICE_EVENT, pb.EventType_VOICEMAIL_EVENT},
 			StartPosition: &pb.SubscribeEventsRequest_StartAtOldestPossible{},
 			ClientId:      uuid.New().String(),
@@ -227,7 +223,13 @@ func main() {
 				Enable:  true,
 				Timeout: ptypes.DurationProto(eventTimeout),
 			},
-		}, grpc_retry.WithMax(10))
+		}
+		r, err := c.Subscribe(
+			ctx,
+			request,
+			grpc_retry.WithMax(MaxUint),
+			grpc_retry.WithBackoff(grpc_retry.BackoffLinear(100*time.Millisecond)),
+			grpc_retry.WithCodes(codes.ResourceExhausted, codes.Internal, codes.Unavailable, codes.Unknown, codes.DataLoss),)
 		if err != nil {
 			log.Panicln("Error while fetching events")
 		}
