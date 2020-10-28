@@ -9,6 +9,7 @@ import (
 	"github.com/gi-wg2/wgtwo-mqtt/intern/oauth/wgtwo"
 	pb "github.com/gi-wg2/wgtwo-mqtt/intern/proto"
 	"github.com/golang/protobuf/jsonpb"
+	"github.com/caddyserver/certmagic"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/google/uuid"
 	"github.com/gorilla/sessions"
@@ -170,7 +171,10 @@ func main() {
 	var clientId = flag.String("client-id", "", "")
 	var clientSecret = flag.String("client-secret", "", "")
 	var redirectUrl = flag.String("redirect-url", "", "")
+	var unsafe = flag.Bool("unsafe", false, "Disable HTTPS")
+	var hostname = flag.String("hostname", "", "Hostname for certificate, required unless -unsafe")
 	flag.Parse()
+	hostnames := []string{*hostname}
 
 	if *redirectUrl == "" {
 		log.Fatalln("--redirect-url cannot be null")
@@ -211,9 +215,15 @@ func main() {
 
 	httpServer := &http.Server{Addr: ":9099"}
 	go func() {
-		if err := httpServer.ListenAndServe(); err != nil {
-			_ = httpServer.Close()
-			done <- true
+		if *unsafe {
+			if err := httpServer.ListenAndServe(); err != nil {
+				_ = httpServer.Close()
+				done <- true
+			}
+		} else {
+			if err := certmagic.HTTPS(hostnames, nil); err != nil {
+				done <- true
+			}
 		}
 	}()
 

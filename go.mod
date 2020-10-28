@@ -3,6 +3,7 @@ module github.com/gi-wg2/wgtwo-mqtt
 go 1.15
 
 require (
+	github.com/caddyserver/certmagic v0.12.0
 	github.com/eclipse/paho.mqtt.golang v1.2.0
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.1.2
